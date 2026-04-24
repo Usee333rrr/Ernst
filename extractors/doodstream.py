@@ -42,6 +42,18 @@ class DoodStreamExtractor:
     def _get_proxy(self, url: str) -> str | None:
         return get_proxy_for_url(url, TRANSPORT_ROUTES, GLOBAL_PROXIES)
 
+    def _build_scraper_proxies(self, url: str) -> dict | None:
+        proxy_url = None
+        if self.proxies:
+            proxy_url = self.proxies[0]
+        if not proxy_url:
+            proxy_url = self._get_proxy(url)
+        if not proxy_url:
+            return None
+
+        normalized_proxy = get_solver_proxy_url(proxy_url) or proxy_url
+        return {"http": normalized_proxy, "https": normalized_proxy}
+
     def _extract_pass_path(self, html: str) -> str | None:
         patterns = [
             r"['\"](/pass_md5/[^'\"]+)['\"]",
@@ -100,8 +112,18 @@ class DoodStreamExtractor:
             scraper = cloudscraper.create_scraper(
                 delay=5
             )
+            scraper_proxies = self._build_scraper_proxies(embed_url)
+            if scraper_proxies:
+                logger.info(f"DoodStream: cloudscraper using proxy {scraper_proxies['https']}")
+
             # cloudscraper is synchronous, so we run it in a thread
-            r = await asyncio.to_thread(scraper.get, embed_url, headers={"User-Agent": _DOOD_UA}, timeout=30)
+            r = await asyncio.to_thread(
+                scraper.get,
+                embed_url,
+                headers={"User-Agent": _DOOD_UA},
+                timeout=30,
+                proxies=scraper_proxies,
+            )
             
             if r.status_code == 200:
                 html = r.text
@@ -125,7 +147,13 @@ class DoodStreamExtractor:
                     
                     logger.info(f"🔗 Cloudscraper found pass_md5 path: {pass_path}")
                     
-                    resp = await asyncio.to_thread(scraper.get, pass_url, headers={"Referer": embed_url}, timeout=30)
+                    resp = await asyncio.to_thread(
+                        scraper.get,
+                        pass_url,
+                        headers={"Referer": embed_url, "User-Agent": _DOOD_UA},
+                        timeout=30,
+                        proxies=scraper_proxies,
+                    )
                     if resp.status_code == 200 and len(resp.text) > 10:
                         base_stream = resp.text.strip()
                         logger.info("✅ DoodStream: cloudscraper extraction successful!")
