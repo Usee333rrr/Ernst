@@ -145,7 +145,7 @@ class VixSrcExtractor:
             raise ExtractorError(f"curl_cffi request failed for {url}: {last_error}")
         raise ExtractorError(f"curl_cffi HTTP error {last_status} for {url}")
 
-    async def _request_flaresolverr(self, cmd: str, url: str = None, headers: dict | None = None, session_id: str = None) -> dict:
+    async def _request_flaresolverr(self, cmd: str, url: str = None, headers: dict | None = None, session_id: str = None, use_proxy: bool = True) -> dict:
         """Sends a request via FlareSolverr to bypass Cloudflare challenges."""
         if not self.flaresolverr_url:
             raise ExtractorError("FlareSolverr URL not configured")
@@ -158,11 +158,12 @@ class VixSrcExtractor:
         fs_headers = {}
         if url:
             payload["url"] = url
-            proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies)
-            if proxy:
-                payload["proxy"] = {"url": proxy}
-                solver_proxy = get_solver_proxy_url(proxy)
-                fs_headers["X-Proxy-Server"] = solver_proxy
+            if use_proxy:
+                proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies)
+                if proxy:
+                    payload["proxy"] = {"url": proxy}
+                    solver_proxy = get_solver_proxy_url(proxy)
+                    fs_headers["X-Proxy-Server"] = solver_proxy
         if session_id:
             payload["session"] = session_id
 
@@ -197,7 +198,12 @@ class VixSrcExtractor:
         self._fs_session_id = sid
 
         # Fetch the embed URL in the session (solves Cloudflare, keeps cf_clearance)
-        result = await self._request_flaresolverr("request.get", url, headers=headers, session_id=sid)
+        # Try direct first (proxy IP may be banned by Cloudflare)
+        try:
+            result = await self._request_flaresolverr("request.get", url, headers=headers, session_id=sid, use_proxy=False)
+        except ExtractorError:
+            logger.warning("FlareSolverr direct failed for %s, trying with proxy", url)
+            result = await self._request_flaresolverr("request.get", url, headers=headers, session_id=sid, use_proxy=True)
         solution = result.get("solution", {})
         html = solution.get("response", "")
 
@@ -225,7 +231,11 @@ class VixSrcExtractor:
         if embed_playlist_url:
             logger.info("FlareSolverr HTML missing tokens, fetching playlist via same session: %s", embed_playlist_url)
             try:
-                pl_result = await self._request_flaresolverr("request.get", embed_playlist_url, session_id=sid)
+                try:
+                    pl_result = await self._request_flaresolverr("request.get", embed_playlist_url, session_id=sid, use_proxy=False)
+                except ExtractorError:
+                    logger.warning("FlareSolverr direct failed for playlist, trying with proxy")
+                    pl_result = await self._request_flaresolverr("request.get", embed_playlist_url, session_id=sid, use_proxy=True)
                 pl_solution = pl_result.get("solution", {})
                 pl_content = pl_solution.get("response", "")
                 pl_status = pl_solution.get("status", 200)
