@@ -36,6 +36,7 @@ class VixSrcExtractor:
         self.flaresolverr_url = FLARESOLVERR_URL
         self.flaresolverr_timeout = FLARESOLVERR_TIMEOUT
         self._fs_cookies = ""
+        self._fs_session_id = None
     @staticmethod
     def _normalize_proxy_url(proxy_value: str) -> str:
         proxy_value = proxy_value.strip()
@@ -144,7 +145,7 @@ class VixSrcExtractor:
             raise ExtractorError(f"curl_cffi request failed for {url}: {last_error}")
         raise ExtractorError(f"curl_cffi HTTP error {last_status} for {url}")
 
-    async def _request_flaresolverr(self, cmd: str, url: str = None, headers: dict | None = None) -> dict:
+    async def _request_flaresolverr(self, cmd: str, url: str = None, headers: dict | None = None, session_id: str = None) -> dict:
         """Sends a request via FlareSolverr to bypass Cloudflare challenges."""
         if not self.flaresolverr_url:
             raise ExtractorError("FlareSolverr URL not configured")
@@ -162,6 +163,8 @@ class VixSrcExtractor:
                 payload["proxy"] = {"url": proxy}
                 solver_proxy = get_solver_proxy_url(proxy)
                 fs_headers["X-Proxy-Server"] = solver_proxy
+        if session_id:
+            payload["session"] = session_id
 
         async with aiohttp.ClientSession() as session:
             try:
@@ -185,20 +188,26 @@ class VixSrcExtractor:
 
         return data
 
-    async def _fetch_via_flaresolverr(self, url: str, headers: dict = None) -> "MockResponse":
-        """Use FlareSolverr to get cf_clearance cookie, then re-fetch with curl_cffi for raw HTML."""
+    async def _fetch_via_flaresolverr(self, url: str, headers: dict = None, embed_playlist_url: str = None) -> "MockResponse":
+        """Use FlareSolverr session to fetch embed HTML then playlist via the same browser session."""
         logger.info("FlareSolverr fallback for %s", url)
-        result = await self._request_flaresolverr("request.get", url, headers=headers)
+
+        # Generate a session ID for persistent browser (auto-created by FlareSolverr)
+        sid = f"vixsrc_{int(time.time())}"
+        self._fs_session_id = sid
+
+        # Fetch the embed URL in the session (solves Cloudflare, keeps cf_clearance)
+        result = await self._request_flaresolverr("request.get", url, headers=headers, session_id=sid)
         solution = result.get("solution", {})
         html = solution.get("response", "")
 
-        # Build Cookie string from FlareSolverr cookies and store for proxy use
+        # Store cookies for proxy use
         fs_cookies = solution.get("cookies", [])
         cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in fs_cookies if c.get("name") and c.get("value"))
         if cookie_str:
             self._fs_cookies = cookie_str
 
-        def _make_resp(text_content, status_code):
+        def _make_resp(text_content, status_code, resp_url=None):
             class _Mock:
                 def __init__(self_, t, s, u):
                     self_._text = t; self_.status = s; self_.status_code = s
@@ -207,39 +216,63 @@ class VixSrcExtractor:
                 def raise_for_status(self_):
                     if self_.status >= 400:
                         raise ExtractorError(f"HTTP error {self_.status} for {self_.url}")
-            return _Mock(text_content, status_code, url)
+            return _Mock(text_content, status_code, resp_url or url)
 
-        # If the HTML already has the tokens, use it directly (fast path)
         if html and ("window.masterPlaylist" in html or "'token':" in html or '"token":' in html):
             return _make_resp(html, 200)
 
-        # fallback: curl_cffi with FlareSolverr cookies to get raw server HTML
-        logger.info("FlareSolverr HTML missing tokens, re-fetching with cookies via curl_cffi")
-        from curl_cffi.requests import AsyncSession as CurlAsyncSession
+        # HTML missing tokens, try fetching the playlist URL directly in the same browser session
+        if embed_playlist_url:
+            logger.info("FlareSolverr HTML missing tokens, fetching playlist via same session: %s", embed_playlist_url)
+            try:
+                pl_result = await self._request_flaresolverr("request.get", embed_playlist_url, session_id=sid)
+                pl_solution = pl_result.get("solution", {})
+                pl_content = pl_solution.get("response", "")
+                pl_status = pl_solution.get("status", 200)
+                if pl_content and pl_status == 200:
+                    # Check if it's a playlist (M3U8) file
+                    if pl_content.lstrip().startswith("#EXTM3U"):
+                        logger.info("FlareSolverr got M3U8 playlist, returning as final URL")
+                        return _make_resp(pl_content, 200, embed_playlist_url)
+                    # If it's HTML, check for redirect or playlist URL
+                    if "window.location" in pl_content or "playlist" in pl_content:
+                        logger.info("FlareSolverr playlist response contains redirect/playlist data")
+                        return _make_resp(pl_content, 200, embed_playlist_url)
+                    logger.info("FlareSolverr playlist response is unknown format, using as fallback")
+                    return _make_resp(pl_content, 200, embed_playlist_url)
+            except Exception as pl_exc:
+                logger.warning("FlareSolverr playlist fetch failed: %s", pl_exc)
 
-        final_headers = self._fresh_headers(**(headers or {}))
-        final_headers.pop("User-Agent", None)
-        final_headers.pop("user-agent", None)
-        if cookie_str:
-            final_headers["Cookie"] = cookie_str
+        logger.info("FlareSolverr HTML missing tokens, no playlist fallback")
+        return _make_resp(html or "", 200)
 
-        async with CurlAsyncSession(impersonate="chrome131") as session:
-            resp = await session.get(url, headers=final_headers, timeout=30, allow_redirects=True)
-            content = resp.text
-            status = resp.status_code
+    @staticmethod
+    def _build_playlist_from_embed(url: str) -> str | None:
+        """Construct vixcloud.co playlist URL from embed URL params."""
+        parsed = urlparse(url)
+        embed_match = re.search(r"/embed/(?P<video_id>\d+)", url)
+        if not embed_match:
+            return None
+        query_params = parse_qs(parsed.query)
+        token = query_params.get("token", [None])[0]
+        expires = query_params.get("expires", [None])[0]
+        if not token or not expires:
+            return None
+        playlist_path = f"/playlist/{embed_match.group('video_id')}"
+        params = {"b": "1", "token": token, "expires": expires, "lang": "it"}
+        if query_params.get("canPlayFHD", ["0"])[0] == "1":
+            params["h"] = "1"
+        site_url = f"{parsed.scheme}://{parsed.netloc}"
+        return f"{site_url}{playlist_path}?{urlencode(params)}"
 
-        logger.info("curl_cffi (with FS cookies) status=%s len=%s for %s", status, len(content) if content else 0, url)
-
-        if status == 200 and content:
-            return _make_resp(content, 200)
-
-        if status == 403 and html:
-            logger.warning("curl_cffi with FS cookies also got 403, using FlareSolverr HTML as fallback")
-            return _make_resp(html, 200)
-
-        if not html:
-            raise ExtractorError(f"FlareSolverr fallback failed: curl_cffi HTTP {status}, FS empty")
-        return _make_resp(html, 200)
+    @staticmethod
+    def _extract_url_from_m3u8(content: str) -> str | None:
+        """Extract the first CDN URL from an M3U8 playlist content."""
+        for line in content.splitlines():
+            line = line.strip()
+            if line.startswith("http://") or line.startswith("https://"):
+                return line
+        return None
 
     @staticmethod
     def _normalize_base_site(url: str) -> str:
@@ -634,9 +667,12 @@ class VixSrcExtractor:
                             )
                         except Exception as curl_err:
                             logger.warning("curl_cffi failed for vixcloud.co, trying FlareSolverr: %s", curl_err)
+                            # Build playlist URL from embed params for FlareSolverr session fallback
+                            embed_m3u8 = self._build_playlist_from_embed(url)
                             response = await self._fetch_via_flaresolverr(
                                 url,
                                 headers={"referer": self._normalize_base_site(url) + "/"},
+                                embed_playlist_url=embed_m3u8,
                             )
                 else:
                     response = await self._make_robust_request(
@@ -723,23 +759,19 @@ class VixSrcExtractor:
                     pass
                 return None
 
-            final_url = await _extract_from_html(response.text)
+            # If response is M3U8 playlist, extract CDN URL from it
+            final_url = self._extract_url_from_m3u8(response.text)
+            if final_url:
+                logger.info("VixSrc CDN URL extracted from M3U8: %s", final_url)
+
+            if not final_url:
+                final_url = await _extract_from_html(response.text)
 
             # fallback: construct playlist URL from embed URL params when HTML has no tokens
             if not final_url and "/embed/" in parsed_url.path:
-                embed_match = re.search(r"/embed/(?P<video_id>\d+)", url)
-                if embed_match:
-                    query_params = parse_qs(parsed_url.query)
-                    token = query_params.get("token", [None])[0]
-                    expires = query_params.get("expires", [None])[0]
-                    if token and expires:
-                        playlist_path = f"/playlist/{embed_match.group('video_id')}"
-                        playlist_params = {"b": "1", "token": token, "expires": expires, "lang": "it"}
-                        if query_params.get("canPlayFHD", ["0"])[0] == "1":
-                            playlist_params["h"] = "1"
-                        site_url = self._normalize_base_site(url)
-                        final_url = f"{site_url}{playlist_path}?{urlencode(playlist_params)}"
-                        logger.info("VixSrc URL constructed from embed params: %s", final_url)
+                final_url = self._build_playlist_from_embed(url)
+                if final_url:
+                    logger.info("VixSrc URL constructed from embed params: %s", final_url)
 
             if not final_url:
                 raise ExtractorError("No playlist data found in response, and embed URL has no token/expires")
