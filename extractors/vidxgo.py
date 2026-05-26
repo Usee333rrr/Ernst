@@ -324,6 +324,16 @@ class VidXgoExtractor:
                 if raw and not raw.startswith("#"):
                     variant_urls.append(urljoin(m3u8_url, raw))
 
+        # Also capture audio/subtitle EXT-X-MEDIA playlist URLs
+        for line in master_lines:
+            if line.startswith("#EXT-X-MEDIA:") and 'URI="' in line:
+                uri_start = line.find('URI="') + 5
+                uri_end = line.find('"', uri_start)
+                if uri_start > 4 and uri_end > uri_start:
+                    media_url = urljoin(m3u8_url, line[uri_start:uri_end])
+                    if media_url not in variant_urls:
+                        variant_urls.append(media_url)
+
         # Fetch variants in parallel; ignore individual failures so the master
         # still plays even if one rendition is broken.
         async def _grab(v_url: str) -> tuple[str, str | None]:

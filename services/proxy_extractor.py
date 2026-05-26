@@ -220,7 +220,6 @@ class HLSProxyExtractorHandlerMixin:
                     text=rewritten_manifest,
                     headers={
                         "Content-Type": "application/vnd.apple.mpegurl",
-                        "Content-Disposition": 'attachment; filename="stream.m3u8"',
                         "Access-Control-Allow-Origin": "*",
                         "Cache-Control": "no-cache",
                     },
