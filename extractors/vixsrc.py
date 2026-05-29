@@ -732,23 +732,9 @@ class VixSrcExtractor:
                     stream_headers["Cookie"] = cookie_str
                     if self._fs_user_agent:
                         stream_headers["User-Agent"] = self._fs_user_agent
-                captured_manifest = None
-                captured_manifests = {}
-                destination_url = url
-                try:
-                    destination_url, captured_manifest, captured_manifests = await self._capture_hls_manifests(
-                        url,
-                        stream_headers,
-                    )
-                except Exception as exc:
-                    if kwargs.get("background_refresh") or kwargs.get("force_refresh"):
-                        raise
-                    logger.warning("VixSrc manifest capture failed, continuing without capture: %s", exc)
                 return {
-                    "destination_url": destination_url,
+                    "destination_url": url,
                     "request_headers": stream_headers,
-                    "captured_manifest": captured_manifest,
-                    "captured_manifests": captured_manifests,
                     "mediaflow_endpoint": self.mediaflow_endpoint,
                     "selected_proxy": selected_proxy or self.last_used_proxy,
                 }
@@ -890,23 +876,10 @@ class VixSrcExtractor:
                 stream_headers["Cookie"] = cookie_str
                 if self._fs_user_agent:
                     stream_headers["User-Agent"] = self._fs_user_agent
-            captured_manifest = None
-            captured_manifests = {}
-            try:
-                final_url, captured_manifest, captured_manifests = await self._capture_hls_manifests(
-                    final_url,
-                    stream_headers,
-                )
-            except Exception as exc:
-                if kwargs.get("background_refresh") or kwargs.get("force_refresh"):
-                    raise
-                logger.warning("VixSrc manifest capture failed, continuing without capture: %s", exc)
             logger.info("VixSrc URL extracted successfully: %s", final_url)
             return {
                 "destination_url": final_url,
                 "request_headers": stream_headers,
-                "captured_manifest": captured_manifest,
-                "captured_manifests": captured_manifests,
                 "mediaflow_endpoint": self.mediaflow_endpoint,
                 "selected_proxy": self.last_used_proxy,
             }
