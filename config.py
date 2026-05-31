@@ -280,7 +280,13 @@ def mark_proxy_dead(proxy_url: str, dead_duration: int = 300):
     """Manually mark a proxy as dead in the cache (e.g. after a failed request) for a period of time."""
     if not proxy_url:
         return
-        
+
+    if WARP_PROXY_URL and proxy_url == WARP_PROXY_URL:
+        if "127.0.0.1" in proxy_url:
+            _PROXY_STATUS_CACHE["last_check"] = 0
+        logging.warning("WARP proxy %s failure observed; keeping it managed by socket health checks.", proxy_url)
+        return
+
     now = time.time()
     DEAD_PROXIES[proxy_url] = now + dead_duration
     logging.warning(f"Proxy {proxy_url} marked as dead for {dead_duration} seconds.")
@@ -444,7 +450,7 @@ MAX_RECORDING_DURATION = int(os.environ.get("MAX_RECORDING_DURATION", 28800))
 RECORDINGS_RETENTION_DAYS = int(os.environ.get("RECORDINGS_RETENTION_DAYS", 7))
 
 # --- Version/Mode Configuration ---
-APP_VERSION = "2.7.53"
+APP_VERSION = "2.7.54"
 
 _has_solvers = os.path.exists("flaresolverr")
 VERSION_MODE = "Full" if _has_solvers else "Light"

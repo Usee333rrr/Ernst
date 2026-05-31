@@ -301,7 +301,8 @@ class HLSProxyCoreMixin:
     async def start_tasks(self):
         """Starts background tasks for the proxy."""
         asyncio.create_task(self._update_latest_version())
-        asyncio.create_task(self._update_warp_status_loop())
+        if ENABLE_WARP:
+            asyncio.create_task(self._update_warp_status_loop())
         asyncio.create_task(self._cleanup_stale_sessions())
 
     async def _cleanup_stale_sessions(self):
@@ -332,7 +333,10 @@ class HLSProxyCoreMixin:
         while True:
             try:
                 # We use the proxy session to check if the SOCKS5H proxy is working
-                session, _ = await self._get_proxy_session("https://www.cloudflare.com/cdn-cgi/trace")
+                session, _ = await self._get_proxy_session(
+                    "https://www.cloudflare.com/cdn-cgi/trace",
+                    forced_proxy=WARP_PROXY_URL,
+                )
                 async with session.get("https://www.cloudflare.com/cdn-cgi/trace", timeout=5) as resp:
                     if resp.status == 200:
                         text = await resp.text()
