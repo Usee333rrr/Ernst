@@ -14,7 +14,7 @@ import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp_socks import ProxyError as AioProxyError
 from python_socks import ProxyError as PyProxyError
-from config import TRANSPORT_ROUTES, GLOBAL_PROXIES, WARP_PROXY_URL, get_connector_for_proxy, SELECTED_PROXY_CONTEXT, STRICT_PROXY_CONTEXT, get_solver_proxy_url, get_extractor_proxies, get_ordered_proxies_for_url, should_allow_direct_fallback, mark_proxy_dead, DEAD_PROXIES, _proxy_lock, FLARESOLVERR_URL, FLARESOLVERR_TIMEOUT
+from config import TRANSPORT_ROUTES, GLOBAL_PROXIES, WARP_PROXY_URL, get_connector_for_proxy, SELECTED_PROXY_CONTEXT, STRICT_PROXY_CONTEXT, get_solver_proxy_url, build_flaresolverr_proxy, get_extractor_proxies, get_ordered_proxies_for_url, should_allow_direct_fallback, mark_proxy_dead, DEAD_PROXIES, _proxy_lock, FLARESOLVERR_URL, FLARESOLVERR_TIMEOUT
 from config import PROXY_TEST_TIMEOUT, PROXY_TEST_CONCURRENCY
 
 from utils.cookie_cache import CookieCache
@@ -518,21 +518,9 @@ class VixSrcExtractor:
 
         fs_proxy = forced_proxy or await self._preferred_proxy(url)
         if fs_proxy:
-            proxy_url = get_solver_proxy_url(fs_proxy)
-            proxy_obj = {"url": proxy_url}
-            if "@" in proxy_url:
-                try:
-                    from urllib.parse import urlparse as _pp
-                    pp = _pp(proxy_url)
-                    if pp.username and pp.password:
-                        proxy_obj["username"] = pp.username
-                        proxy_obj["password"] = pp.password
-                        proxy_obj["url"] = f"{pp.scheme}://{pp.hostname}"
-                        if pp.port:
-                            proxy_obj["url"] += f":{pp.port}"
-                except Exception:
-                    pass
-            payload["proxy"] = proxy_obj
+            proxy_obj = build_flaresolverr_proxy(fs_proxy)
+            if proxy_obj:
+                payload["proxy"] = proxy_obj
 
         cookie_header = (headers or {}).get("Cookie") or (headers or {}).get("cookie")
         if cookie_header:
