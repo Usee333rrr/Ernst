@@ -4,7 +4,7 @@ import urllib.parse
 import services.proxy_shared as _shared
 from services.proxy_shared import (
     logger, web, APP_VERSION, VERSION_MODE,
-    check_password, PlaylistBuilder, ClientSession, ClientTimeout,
+    check_password, get_client_ip, PlaylistBuilder, ClientSession, ClientTimeout,
     TCPConnector, ProxyConnector, get_connector_for_proxy, API_PASSWORD,
 )
 from extractors.registry import *
@@ -524,7 +524,7 @@ class HLSProxyPagesMixin:
             urls_to_process = data.get("urls", [])
 
             # --- LOGGING RICHIESTO ---
-            client_ip = request.remote
+            client_ip = get_client_ip(request)
             exit_strategy = "IP del Server (Diretto)"
             if _shared.GLOBAL_PROXIES:
                 exit_strategy = (

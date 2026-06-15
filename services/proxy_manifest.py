@@ -7,6 +7,7 @@ from services.proxy_shared import (
     logger,
     web,
     check_password,
+    get_client_ip,
     BYPASS_WARP_CONTEXT,
     BYPASS_PROXIES_CONTEXT,
     SELECTED_PROXY_CONTEXT,
@@ -33,7 +34,7 @@ class HLSProxyManifestHandlerMixin:
         """Gestisce le richieste proxy principali"""
         if not check_password(request):
             logger.warning(
-                f"⛔ Access denied: Invalid or missing API Password. IP: {request.remote}"
+                f"⛔ Access denied: Invalid or missing API Password. IP: {get_client_ip(request)}"
             )
             return web.Response(status=401, text="Unauthorized: Invalid API Password")
 
@@ -95,7 +96,7 @@ class HLSProxyManifestHandlerMixin:
                 except Exception:
                     pass
             _shared.record_stream_activity(
-                request.remote,
+                get_client_ip(request),
                 display_url,
                 request.headers.get("User-Agent", ""),
                 is_segment=is_segment

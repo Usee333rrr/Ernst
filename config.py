@@ -788,7 +788,7 @@ API_PASSWORD = os.environ.get("API_PASSWORD")
 PORT = int(os.environ.get("PORT", 7860))
 
 # --- Version/Mode Configuration ---
-APP_VERSION = "2.9.14"
+APP_VERSION = "2.9.15"
 
 _has_solvers = os.path.exists("flaresolverr")
 VERSION_MODE = "Full" if _has_solvers else "Light"
@@ -811,6 +811,36 @@ def check_password(request):
         return True
 
     return False
+
+
+def get_client_ip(request):
+    """Recupera l'IP reale del client, supportando Cloudflare e reverse proxy."""
+    # Cloudflare
+    cf_ip = request.headers.get("CF-Connecting-IP")
+    if cf_ip:
+        return cf_ip.strip()
+
+    # True-Client-IP (Cloudflare Enterprise / Akamai)
+    true_ip = request.headers.get("True-Client-IP")
+    if true_ip:
+        return true_ip.strip()
+
+    # X-Forwarded-For (standard per reverse proxy)
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        # Prende il primo IP della catena (quello originale del client)
+        parts = [p.strip() for p in xff.split(",")]
+        if parts and parts[0]:
+            return parts[0]
+
+    # X-Real-IP
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
+
+    # Fallback all'indirizzo remoto della richiesta aiohttp
+    return request.remote
+
 
 
 def reload_config():
